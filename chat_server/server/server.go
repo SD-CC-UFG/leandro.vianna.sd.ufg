@@ -95,7 +95,7 @@ func talkHandler(scanner *bufio.Scanner, writer *bufio.Writer) {
 
 	writer.Write([]byte("OK\n"))
 	writer.Flush()
-	log.Printf("Nova conexão do tipo JOIN feita por %s\n", name)
+	log.Printf("Conexao JOIN com %s efetivada\n", name)
 
 	msg := fmt.Sprintf("%s entrou no chat.", name)
 

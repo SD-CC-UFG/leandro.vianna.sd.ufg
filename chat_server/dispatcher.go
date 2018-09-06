@@ -1,26 +1,24 @@
 package main
 
 import (
-	"errors"
-	"github.com/sd-cc-ufg/leandro.vianna.sd.ufg/chat_server/queue"
 	"github.com/sd-cc-ufg/leandro.vianna.sd.ufg/chat_server/server"
 	"log"
 	"net"
 	"strconv"
+	"sync"
 )
 
-var connChanQueue *queue.Queue
+var available = 0
+var mutex *sync.Mutex
 
-func Dispatcher(port int, numberThreads int) error {
-	// criando fila com channels de conexoes
-	connChanQueue = queue.New()
+func Dispatcher(port int, numberThreads int, minAvailable int) error {
+	connChannel := make(chan net.Conn)
+	mutex = &sync.Mutex{}
 
 	for i := 0; i < numberThreads; i++ {
-		// iniciando goroutine e armazendo na fila channel para
+		// iniciando goroutine e passando o channel para
 		// comunicao com dispatcher
-		channel := make(chan net.Conn) // canal de comunicao dispatcher <-> goroutine
-		connChanQueue.Push(channel)
-		go handler(channel, i)
+		go handler(connChannel, i)
 	}
 
 	listen, err := net.Listen("tcp", ":"+strconv.Itoa(port))
@@ -37,36 +35,45 @@ func Dispatcher(port int, numberThreads int) error {
 			return err
 		}
 
-		if !connChanQueue.Empty() {
-			channel, err := connChanQueue.Pop()
-			if err != nil {
-				conn.Close()
-				return err
-			}
+		mutex.Lock()
+		log.Printf("Dispatcher enviando conexão no channel (%d disponíveis).\n", available)
+		mutex.Unlock()
 
-			switch channel := channel.(type) {
-			case chan net.Conn:
-				channel <- conn
-			default:
-				conn.Close()
-				return errors.New("Item of channels queue is not net.Conn channel\n")
+		// enviando conexao para o channel
+		// assim a primeira goroutine disponivel vai assumir
+		// a conexao
+		connChannel <- conn
+
+		mutex.Lock()
+		howMany := available
+		mutex.Unlock()
+
+		if howMany < minAvailable {
+			log.Printf("Dispatcher criando mais goroutines (subindo para %d)\n", 2*numberThreads)
+			for i := numberThreads; i < 2*numberThreads; i++ {
+				go handler(connChannel, i)
 			}
+			numberThreads = 2 * numberThreads
 		}
 	}
 }
 
-func handler(connChan chan net.Conn, mynumber int) {
+func handler(connChannel chan net.Conn, mynumber int) {
 	for {
-		log.Printf("Goroutine %d expecting connection\n", mynumber)
-		conn := <-connChan
-		log.Printf("Goroutine %d accepted a connection\n", mynumber)
+		log.Printf("Goroutine %d esperando por uma conexao\n", mynumber)
+		mutex.Lock()
+		available++
+		mutex.Unlock()
+
+		conn := <-connChannel
+
+		log.Printf("Goroutine %d recebeu uma conexao\n", mynumber)
+		mutex.Lock()
+		available--
+		mutex.Unlock()
 
 		// passando para servidor tratar conexao
 		// ele deve fecha-la
 		server.HandleConnection(conn)
-
-		// ao final do tratamento
-		// goroutine coloca seu channel na fila para ficar disponivel
-		connChanQueue.Push(connChan)
 	}
 }
