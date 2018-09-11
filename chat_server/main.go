@@ -1,18 +1,18 @@
 package main
 
 import (
+	"github.com/sd-cc-ufg/leandro.vianna.sd.ufg/chat_server/chatserver"
 	"github.com/sd-cc-ufg/leandro.vianna.sd.ufg/chat_server/dispatcher"
-	"github.com/sd-cc-ufg/leandro.vianna.sd.ufg/chat_server/server"
 	"log"
 )
 
 func main() {
 	const PORT = 7777
-	const MAX_THREADS = 10000
-	const MIN_AVAILABLE = 10
+	const MAX_THREADS = 10
+	const MIN_AVAILABLE = 4
 
-	dispatcher := dispatcher.NewDispatcher(PORT, MAX_THREADS, MIN_AVAILABLE,
-		server.HandleConnection)
+	chatServer := chatserver.NewChatServer()
+	dispatcher := dispatcher.NewDispatcher(PORT, MAX_THREADS, MIN_AVAILABLE, chatServer)
 
 	err := dispatcher.Start()
 

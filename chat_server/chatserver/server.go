@@ -1,4 +1,4 @@
-package server
+package chatserver
 
 import (
 	"bufio"
@@ -7,35 +7,45 @@ import (
 	"net"
 	"strings"
 	"sync"
-	"time"
 )
 
-type Message struct {
-	SenderName string
-	Text       string
-	Time       time.Time
+type ChatServer struct {
+	messageChannels      []chan Message
+	messageChannelsMutex *sync.Mutex
 }
 
-func (m Message) String() string {
-	return fmt.Sprintf("[%s] %s: %s\n", m.Time.Format("15:04:05"), m.SenderName, m.Text)
+func NewChatServer() *ChatServer {
+	return &ChatServer{messageChannels: make([]chan Message, 0), messageChannelsMutex: &sync.Mutex{}}
 }
 
-func NewMessage(name, msg string) Message {
-	message := Message{name, msg, time.Now()}
-	return message
-}
-
-var messageQueue []Message
-var msgQueueMutex sync.Mutex
-
-func AddMessage(name, msg string) {
-	msgQueueMutex.Lock()
+func (cs *ChatServer) addChatMessage(name, msg string) {
 	log.Printf("Nova mensagem adicionada na fila por %s\n", name)
-	messageQueue = append(messageQueue, NewMessage(name, msg))
-	msgQueueMutex.Unlock()
+	message := NewMessage(name, msg)
+
+	cs.messageChannelsMutex.Lock()
+
+	// percorrendo slice com channels para envio de mensagens
+	for _, ch := range cs.messageChannels {
+		// envio nao bloqueante para o channel ch
+		// caso o channel ch nao tenha ninguem recebendo default é executado
+		select {
+		case ch <- message:
+		default:
+		}
+	}
+
+	cs.messageChannelsMutex.Unlock()
 }
 
-func HandleConnection(conn net.Conn) {
+func (cs *ChatServer) addMessageChannel(channel chan Message) {
+	cs.messageChannelsMutex.Lock()
+
+	cs.messageChannels = append(cs.messageChannels, channel)
+
+	cs.messageChannelsMutex.Unlock()
+}
+
+func (cs *ChatServer) Handle(conn net.Conn) {
 	// tratador de conexao do servidor deve fechar conexao
 	defer conn.Close()
 
@@ -62,16 +72,16 @@ func HandleConnection(conn net.Conn) {
 
 	switch command {
 	case "JOIN":
-		talkHandler(scanner, writer)
+		cs.talkHandler(scanner, writer)
 
 	case "VIEW":
-		viewHandler(writer)
+		cs.viewHandler(writer)
 	}
 
 	log.Printf("Fim de conexao com %s.\n", conn.RemoteAddr())
 }
 
-func talkHandler(scanner *bufio.Scanner, writer *bufio.Writer) {
+func (cs *ChatServer) talkHandler(scanner *bufio.Scanner, writer *bufio.Writer) {
 	log.Printf("Nova conexão do tipo JOIN requisitada.\n")
 
 	scanner.Scan()
@@ -99,7 +109,7 @@ func talkHandler(scanner *bufio.Scanner, writer *bufio.Writer) {
 
 	msg := fmt.Sprintf("%s entrou no chat.", name)
 
-	AddMessage("ADM", msg)
+	cs.addChatMessage("ADM", msg)
 
 	// loop para esperar por mensagens desse usuario
 	for {
@@ -139,33 +149,35 @@ func talkHandler(scanner *bufio.Scanner, writer *bufio.Writer) {
 		}
 
 		// adiciona mensagem e volta a esperar novas mensagens
-		AddMessage(name, msg)
+		cs.addChatMessage(name, msg)
 
 		writer.Write([]byte("OK\n"))
 		writer.Flush()
 	}
 
 	msg = fmt.Sprintf("%s saiu do chat.", name)
-	AddMessage("ADM", msg)
+	cs.addChatMessage("ADM", msg)
 
 	log.Printf("Fim de conexao com %s\n", name)
 }
 
-func viewHandler(writer *bufio.Writer) {
-	log.Printf("Nova conexao do tipo VIEW\n")
-	var i = 0
-
+func (cs *ChatServer) viewHandler(writer *bufio.Writer) {
 	// envia mensagens do chat para cliente conectado
-	for {
 
+	log.Printf("Nova conexao do tipo VIEW\n")
+
+	mychannel := make(chan Message)
+	// limitação: sempre adiciona novos channels ao slice, mantendo channels possivelmente "mortos"
+	cs.addMessageChannel(mychannel)
+
+	for {
 		// se houver novas mensagens, envia para o cliente
-		for i < len(messageQueue) {
-			_, err := writer.Write([]byte(fmt.Sprintf("%v\n", messageQueue[i])))
-			if err != nil {
-				log.Printf("ERRO em conexao VIEW: %v.", err)
-				return
-			}
-			i++
+		msg := <-mychannel
+
+		_, err := writer.Write([]byte(fmt.Sprintf("%v\n", msg)))
+		if err != nil {
+			log.Printf("ERRO em conexao VIEW: %v.", err)
+			return
 		}
 		writer.Flush()
 	}

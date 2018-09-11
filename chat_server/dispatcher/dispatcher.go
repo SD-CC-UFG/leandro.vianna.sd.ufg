@@ -7,6 +7,10 @@ import (
 	"sync"
 )
 
+type ConnectionHandler interface {
+	Handle(conn net.Conn)
+}
+
 type Dispatcher struct {
 	available int
 	mutex     *sync.Mutex
@@ -15,12 +19,12 @@ type Dispatcher struct {
 	numberThreads int
 	minAvailable  int
 
-	connHandler func(net.Conn)
+	handler ConnectionHandler
 }
 
-func NewDispatcher(port, numberThreads, minAvailable int, connHandler func(net.Conn)) Dispatcher {
+func NewDispatcher(port, numberThreads, minAvailable int, handler ConnectionHandler) Dispatcher {
 	dispatcher := Dispatcher{available: 0, mutex: &sync.Mutex{}, port: port,
-		numberThreads: numberThreads, minAvailable: minAvailable, connHandler: connHandler}
+		numberThreads: numberThreads, minAvailable: minAvailable, handler: handler}
 	return dispatcher
 }
 
@@ -30,7 +34,7 @@ func (d *Dispatcher) Start() error {
 	for i := 0; i < d.numberThreads; i++ {
 		// iniciando goroutine e passando o channel para
 		// comunicao com dispatcher
-		go d.handler(connChannel, i)
+		go d.waitPassConnection(connChannel, i)
 	}
 
 	listen, err := net.Listen("tcp", ":"+strconv.Itoa(d.port))
@@ -60,7 +64,7 @@ func (d *Dispatcher) Start() error {
 		if d.available < d.minAvailable {
 			log.Printf("Dispatcher criando mais goroutines (subindo para %d)\n", 2*d.numberThreads)
 			for i := d.numberThreads; i < 2*d.numberThreads; i++ {
-				go d.handler(connChannel, i)
+				go d.waitPassConnection(connChannel, i)
 			}
 			d.available += d.numberThreads
 			d.numberThreads = 2 * d.numberThreads
@@ -69,7 +73,7 @@ func (d *Dispatcher) Start() error {
 	}
 }
 
-func (d *Dispatcher) handler(connChannel chan net.Conn, mynumber int) {
+func (d *Dispatcher) waitPassConnection(connChannel chan net.Conn, mynumber int) {
 	for {
 		log.Printf("Goroutine %d esperando por uma conexao\n", mynumber)
 		conn := <-connChannel
@@ -81,7 +85,7 @@ func (d *Dispatcher) handler(connChannel chan net.Conn, mynumber int) {
 
 		// passando conexao para callback passada na criacao
 		// do dispatcher tratar a conexao
-		d.connHandler(conn)
+		d.handler.Handle(conn)
 
 		d.mutex.Lock()
 		d.available++
